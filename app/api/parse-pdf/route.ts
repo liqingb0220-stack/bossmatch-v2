@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     const data = await pdfParse(buffer);
-    const text = data.text.trim().substring(0, 2000);
+    const text = data.text.trim();
     
     return NextResponse.json({ text });
 
