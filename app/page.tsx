@@ -11,7 +11,6 @@ import { ProcessSteps, StepItem } from './components/ProcessSteps';
 import { AuthModal } from './components/AuthModal';
 import { HistoryModal } from './components/HistoryModal';
 
-const MAX_RESUME_LENGTH = 2000;
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
@@ -95,43 +94,34 @@ export default function Home() {
     setShowHistoryModal(false);
   };
 
-const extractTextFromPdf = async (file: File) => {
-  setIsParsingPdf(true);
-  setError(null);
-  try {
-   const pdfjsLib = await import('pdfjs-dist');
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.5.207/build/pdf.worker.mjs';
+  const extractTextFromPdf = async (file: File) => {
+     setIsParsingPdf(true);
+     setError(null);
+     try {
+    // ✅ 把PDF发给后端解析，手机电脑都能用
+    const formData = new FormData();
+    formData.append("file", file);
 
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const res = await fetch("/api/parse-pdf", {
+      method: "POST",
+      body: formData,
+    });
 
-    let fullText = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
-    }
+    if (!res.ok) throw new Error(await res.text());
+    const { text } = await res.json();
 
-    const trimmedText = fullText.trim().substring(0, MAX_RESUME_LENGTH);
-    setProfile(prev => ({ ...prev, resumeText: trimmedText }));
+    setProfile(prev => ({ ...prev, resumeText: text }));
     setFileName(file.name);
 
-    if (!trimmedText.trim()) {
-      setError('PDF 已读取，但没提取到文字。这个文件可能是扫描版或图片版 PDF。');
-      return;
+    if (!text || text.length < 10) {
+      setError("PDF 内容提取失败，请确认文件包含文字而非图片扫描件。");
     }
-
-    if (fullText.trim().length > MAX_RESUME_LENGTH) {
-      setError(`简历内容较多，已自动截取前 ${MAX_RESUME_LENGTH} 字。`);
-      setTimeout(() => setError(null), 4000);
-    }
-  } catch (err: any) {
-    console.error('PDF parse error:', err);
-    setError(`PDF 解析失败：${err?.message || String(err)}`);
-  } finally {
+    } catch (err) {
+    setError("PDF 解析失败，请检查文件是否损坏或已加密。");
+    } finally {
     setIsParsingPdf(false);
-  }
-};
+    }
+   };
 
   // ✅ 核心改动：调用我们自己的后端 API，而不是直接调用 Gemini
   const handleStartSearch = async () => {
