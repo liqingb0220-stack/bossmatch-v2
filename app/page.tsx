@@ -1,65 +1,373 @@
-import Image from "next/image";
+'use client';
+
+import React, { useState, useRef, useEffect } from 'react';
+import { Layout } from './components/Layout';
+import { UserProfile, JobMatch, AnalysisResult, User, HistoryItem } from '../types';
+import { AnalysisView } from './components/AnalysisView';
+import { JobCard } from './components/ JobCard';
+import { OptimizationModal } from './components/OptimizationModal';
+import { JobDetailsModal } from './components/JobDetailsModal';
+import { ProcessSteps, StepItem } from './components/ProcessSteps';
+import { AuthModal } from './components/AuthModal';
+import { HistoryModal } from './components/HistoryModal';
+
+const MAX_RESUME_LENGTH = 2000;
 
 export default function Home() {
+  const [user, setUser] = useState<User | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+
+  const [profile, setProfile] = useState<UserProfile>({ resumeText: '', expectations: '' });
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [isParsingPdf, setIsParsingPdf] = useState(false);
+  const [step, setStep] = useState<'input' | 'results'>('input');
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [jobs, setJobs] = useState<JobMatch[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [seenJobKeys, setSeenJobKeys] = useState<string[]>([]);
+  const [matchSteps, setMatchSteps] = useState<StepItem[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [selectedJobForDetails, setSelectedJobForDetails] = useState<JobMatch | null>(null);
+  const [selectedJobForOptimize, setSelectedJobForOptimize] = useState<JobMatch | null>(null);
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem('bossmatch_user');
+    if (savedUser) setUser(JSON.parse(savedUser));
+    const savedHistory = localStorage.getItem('bossmatch_history');
+    if (savedHistory) setHistory(JSON.parse(savedHistory));
+  }, []);
+
+  const getFriendlyErrorMessage = (err: any): string => {
+    const msg = err?.message || String(err);
+    if (msg.includes('429') || msg.includes('quota')) {
+      return 'AI 引擎目前请求过于频繁。建议：请稍等 60 秒后再次尝试。';
+    }
+    if (msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')) {
+      return '网络连接不稳定，AI 数据传输中断。建议：检查您的网络连接后重试。';
+    }
+    return 'AI 系统由于过载或超时暂时停止了响应。建议：尝试精简简历文本后再次点击重试。';
+  };
+
+  const handleLogin = (provider: 'google' | 'apple') => {
+    const mockUser: User = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: provider === 'google' ? 'Google 体验用户' : 'Apple 体验用户',
+      email: `${provider}_user@example.com`,
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${provider}`
+    };
+    setUser(mockUser);
+    localStorage.setItem('bossmatch_user', JSON.stringify(mockUser));
+    setShowAuthModal(false);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('bossmatch_user');
+  };
+
+  const handleSaveAnalysis = () => {
+    if (!user) { setShowAuthModal(true); return; }
+    if (!analysis || jobs.length === 0) return;
+    const newItem: HistoryItem = {
+      id: Date.now().toString(),
+      timestamp: Date.now(),
+      profile: { ...profile },
+      analysis: { ...analysis },
+      jobs: [...jobs]
+    };
+    const updatedHistory = [newItem, ...history];
+    setHistory(updatedHistory);
+    localStorage.setItem('bossmatch_history', JSON.stringify(updatedHistory));
+    alert('分析已保存至本地');
+  };
+
+  const handleRestoreHistory = (item: HistoryItem) => {
+    setProfile(item.profile);
+    setAnalysis(item.analysis);
+    setJobs(item.jobs);
+    setSeenJobKeys(item.jobs.map(j => `${j.company}-${j.title}`));
+    setStep('results');
+    setShowHistoryModal(false);
+  };
+
+const extractTextFromPdf = async (file: File) => {
+  setIsParsingPdf(true);
+  setError(null);
+  try {
+   const pdfjsLib = await import('pdfjs-dist');
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@5.5.207/build/pdf.worker.mjs';
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+    let fullText = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      fullText += textContent.items.map((item: any) => item.str).join(' ') + '\n';
+    }
+
+    const trimmedText = fullText.trim().substring(0, MAX_RESUME_LENGTH);
+    setProfile(prev => ({ ...prev, resumeText: trimmedText }));
+    setFileName(file.name);
+
+    if (!trimmedText.trim()) {
+      setError('PDF 已读取，但没提取到文字。这个文件可能是扫描版或图片版 PDF。');
+      return;
+    }
+
+    if (fullText.trim().length > MAX_RESUME_LENGTH) {
+      setError(`简历内容较多，已自动截取前 ${MAX_RESUME_LENGTH} 字。`);
+      setTimeout(() => setError(null), 4000);
+    }
+  } catch (err: any) {
+    console.error('PDF parse error:', err);
+    setError(`PDF 解析失败：${err?.message || String(err)}`);
+  } finally {
+    setIsParsingPdf(false);
+  }
+};
+
+  // ✅ 核心改动：调用我们自己的后端 API，而不是直接调用 Gemini
+  const handleStartSearch = async () => {
+    if (!profile.resumeText || !profile.expectations) {
+      setError('请输入简历和职业期待以开启匹配。');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setMatchSteps([
+      { id: '1', label: 'AI 简历建模', status: 'loading', subText: '正在识别职业肖像...' },
+      { id: '2', label: '全网岗位对标', status: 'pending' },
+      { id: '3', label: '深度语义筛选', status: 'pending' }
+    ]);
+
+    try {
+      // 第一步：调用后端 /api/analyze
+      const analyzeRes = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resumeText: profile.resumeText, expectations: profile.expectations })
+      });
+      if (!analyzeRes.ok) throw new Error(await analyzeRes.text());
+      const analysisData: AnalysisResult = await analyzeRes.json();
+      setAnalysis(analysisData);
+
+      setMatchSteps(prev => prev.map(s =>
+        s.id === '1' ? { ...s, status: 'completed', subText: '✔ 已识别核心竞争力' } :
+        s.id === '2' ? { ...s, status: 'loading', subText: '正在检索 5 个最匹配的实时岗位...' } : s
+      ));
+
+      // 第二步：调用后端 /api/match-jobs
+      const matchRes = await fetch('/api/match-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile, analysis: analysisData, excludeTitles: [] })
+      });
+      if (!matchRes.ok) throw new Error(await matchRes.text());
+      const matchedJobs: JobMatch[] = await matchRes.json();
+
+      setMatchSteps(prev => prev.map(s =>
+        s.id === '2' ? { ...s, status: 'completed', subText: '✔ 已定位 5 个优质在招职位' } :
+        s.id === '3' ? { ...s, status: 'loading', subText: '正在进行精细化对标分析...' } : s
+      ));
+
+      await new Promise(r => setTimeout(r, 600));
+      setJobs(matchedJobs);
+      setSeenJobKeys(matchedJobs.map(j => `${j.company}-${j.title}`));
+      setStep('results');
+    } catch (err: any) {
+      setError(getFriendlyErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    if (!analysis) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const matchRes = await fetch('/api/match-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile, analysis, excludeTitles: seenJobKeys })
+      });
+      if (!matchRes.ok) throw new Error(await matchRes.text());
+      const newJobs: JobMatch[] = await matchRes.json();
+      if (newJobs.length > 0) {
+        setJobs(newJobs);
+        setSeenJobKeys(prev => [...prev, ...newJobs.map(j => `${j.company}-${j.title}`)]);
+      } else {
+        setError('暂未搜索到更多高匹配岗位。');
+        setTimeout(() => setError(null), 3000);
+      }
+    } catch (err) {
+      setError(getFriendlyErrorMessage(err));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleReset = () => {
+    setStep('input');
+    setAnalysis(null);
+    setJobs([]);
+    setSeenJobKeys([]);
+    setFileName(null);
+    setError(null);
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <Layout
+      user={user}
+      onLogout={handleLogout}
+      onLoginClick={() => setShowAuthModal(true)}
+      onShowHistory={() => user ? setShowHistoryModal(true) : setShowAuthModal(true)}
+      onAvatarUpload={(url) => user && setUser({ ...user, avatar: url })}
+    >
+      <div className="max-w-7xl mx-auto px-4 py-8 sm:py-12">
+        {step === 'input' ? (
+          <div className="max-w-3xl mx-auto space-y-12 animate-fade-in">
+            <div className="text-center space-y-6">
+              <h2 className="text-4xl sm:text-6xl font-extrabold text-slate-800 tracking-tight leading-tight">
+                遇见你的 <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-500">下一份梦想</span>
+              </h2>
+              <p className="text-lg sm:text-xl text-slate-500 max-w-2xl mx-auto font-medium">
+                上传简历开启 AI 智能筛选，精准锁定全网匹配机会。
+              </p>
+            </div>
+
+            <div className="glass-panel rounded-[2rem] p-8 sm:p-12 space-y-10">
+              <div className="space-y-4">
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest">1. 导入简历 (PDF)</label>
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`group relative border-2 border-dashed rounded-3xl p-10 transition-all cursor-pointer flex flex-col items-center justify-center space-y-4 ${
+                    fileName ? 'border-blue-300 bg-blue-50/20' : 'border-slate-200 hover:border-blue-300 hover:bg-white/50'
+                  }`}
+                >
+                  <input type="file" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && extractTextFromPdf(e.target.files[0])} accept=".pdf" className="hidden" />
+                  {isParsingPdf ? (
+                    <div className="flex flex-col items-center animate-pulse text-blue-600">
+                      <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-2"></div>
+                      <span className="text-xs font-bold">读取中...</span>
+                    </div>
+                  ) : fileName ? (
+                    <div className="text-center">
+                      <p className="text-blue-700 font-bold text-lg">{fileName}</p>
+                      <p className="text-[10px] text-slate-400 mt-1 uppercase font-black">点击更换文件</p>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <p className="text-slate-600 font-bold text-lg">点击上传 PDF 简历</p>
+                      <p className="text-[10px] text-slate-400 mt-1 uppercase font-black">AI 将自动对标核心优势</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest">2. 职业期待</label>
+                <textarea
+                  className="w-full h-40 p-6 bg-white/40 border border-slate-200 rounded-[2rem] focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all outline-none text-slate-700 font-medium leading-relaxed resize-none shadow-inner"
+                  placeholder="例如：北京 AI 产品经理，20k 以上..."
+                  value={profile.expectations}
+                  onChange={(e) => setProfile({ ...profile, expectations: e.target.value })}
+                />
+              </div>
+
+              {loading && (
+                <div className="px-4 py-6 bg-slate-50/30 rounded-[2rem] border border-white/50">
+                  <ProcessSteps steps={matchSteps} />
+                </div>
+              )}
+
+              {error && (
+                <div className="bg-red-50/80 text-red-600 p-6 rounded-2xl text-sm font-semibold border border-red-100 animate-fade-in flex flex-col items-center text-center">
+                  <div className="flex items-center mb-1 text-red-700">
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                    <span>服务暂不可用</span>
+                  </div>
+                  <p className="text-slate-600 leading-relaxed font-medium">{error}</p>
+                  <button onClick={handleStartSearch} className="mt-4 text-blue-600 underline font-bold uppercase tracking-widest text-[10px]">立即重试</button>
+                </div>
+              )}
+
+              <button
+                onClick={handleStartSearch}
+                disabled={loading || isParsingPdf}
+                className="w-full py-6 bg-gradient-to-r from-blue-600 to-indigo-700 text-white rounded-[2rem] font-extrabold text-xl shadow-xl hover:shadow-2xl hover:translate-y-[-4px] transition-all disabled:opacity-70"
+              >
+                {loading ? '检索中...' : '立即开启智能筛选'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-12 animate-fade-in">
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+              <div>
+                <button onClick={handleReset} className="text-blue-600 flex items-center text-xs font-extrabold uppercase tracking-widest hover:-translate-x-1 transition-transform mb-4">
+                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                  </svg>
+                  重新配置档案
+                </button>
+                <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-800 tracking-tight">为您匹配的 5 个优质岗位</h2>
+                <p className="text-slate-500 mt-2 font-medium">AI 已基于全网公开招聘信息定位以下机会</p>
+              </div>
+              <button onClick={handleRefresh} disabled={refreshing} className="glass-panel text-blue-600 border border-slate-200 px-8 py-3.5 rounded-full text-sm font-bold hover:bg-white transition-all flex items-center shadow-sm disabled:opacity-50">
+                <svg className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                {refreshing ? '正在刷新...' : '换一批'}
+              </button>
+            </div>
+
+            {analysis && (
+              <div className="glass-panel rounded-[2rem] overflow-hidden">
+                <AnalysisView analysis={analysis} />
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {jobs.map((job, idx) => (
+                <div key={idx} className="glass-panel rounded-[2rem] hover:shadow-2xl hover:-translate-y-2 transition-all flex flex-col h-full overflow-hidden border-0">
+                  <JobCard job={job} onOptimize={() => setSelectedJobForOptimize(job)} onViewDetails={() => setSelectedJobForDetails(job)} />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col items-center pt-10 space-y-8">
+              {error && <div className="bg-red-50 text-red-600 p-4 rounded-xl text-xs font-bold border border-red-100">{error}</div>}
+              <button onClick={handleSaveAnalysis} className="glass-panel px-12 py-5 rounded-[2rem] text-blue-600 font-extrabold flex items-center space-x-3 hover:bg-blue-600 hover:text-white transition-all shadow-xl group border-0">
+                <svg className="w-6 h-6 group-hover:scale-125 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+                </svg>
+                <span>保存本次分析报告</span>
+              </button>
+              <div className="max-w-3xl w-full text-center py-8 border-t border-slate-200/50">
+                <p className="text-[11px] text-slate-400 font-bold uppercase tracking-[0.1em] leading-relaxed">
+                  免责声明：匹配结果由 AI 深度建模生成，仅供择业参考。本平台不代表企业方的真实录用承诺，岗位开放状态及详情请以原招聘平台官方信息为准。
+                </p>
+              </div>
+            </div>
+
+            <JobDetailsModal job={selectedJobForDetails} onClose={() => setSelectedJobForDetails(null)} onOptimize={(j) => { setSelectedJobForDetails(null); setSelectedJobForOptimize(j); }} />
+            <OptimizationModal job={selectedJobForOptimize} resumeText={profile.resumeText} onClose={() => setSelectedJobForOptimize(null)} />
+          </div>
+        )}
+      </div>
+
+      {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} onLogin={handleLogin} />}
+      {showHistoryModal && <HistoryModal history={history} onClose={() => setShowHistoryModal(false)} onRestore={handleRestoreHistory} />}
+    </Layout>
   );
 }
