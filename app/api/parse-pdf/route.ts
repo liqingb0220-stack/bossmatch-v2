@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require("pdf-parse");
+import { extractText } from "unpdf";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,12 +11,12 @@ export async function POST(request: NextRequest) {
     }
 
     const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const buffer = new Uint8Array(arrayBuffer);
 
-    const data = await pdfParse(buffer);
-    const text = data.text.trim();
-    
-    return NextResponse.json({ text });
+    const { text } = await extractText(buffer, { mergePages: true });
+    const cleanText = text.trim();
+
+    return NextResponse.json({ text: cleanText });
 
   } catch (error: any) {
     console.error("parse-pdf error:", error);
