@@ -1,6 +1,6 @@
-
 import React from 'react';
 import { JobMatch } from '../../types';
+import { trackEvent } from '@/lib/analytics';
 
 interface JobDetailsModalProps {
   job: JobMatch | null;
@@ -22,6 +22,15 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({ job, onClose, 
   };
 
   const homePageUrl = getHomePageUrl(job.url);
+
+  const handleOptimize = () => {
+    trackEvent('resume_optimize_click', { job_title: job.title });
+    onOptimize(job);
+  };
+
+  const handleExternalLink = () => {
+    trackEvent('external_link_click', { target: job.source || '招聘平台', url: job.url });
+  };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-fade-in">
@@ -71,7 +80,7 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({ job, onClose, 
 
         <div className="p-6 border-t bg-gray-50 flex gap-4">
           <button 
-            onClick={() => onOptimize(job)}
+            onClick={handleOptimize}
             className="flex-1 py-4 bg-white border-2 border-blue-600 text-blue-600 rounded-2xl font-bold hover:bg-blue-50 transition-all flex items-center justify-center space-x-2 shadow-sm"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
@@ -81,6 +90,7 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({ job, onClose, 
             href={homePageUrl} 
             target="_blank" 
             rel="noopener noreferrer"
+            onClick={handleExternalLink}
             className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg flex items-center justify-center space-x-2"
           >
             <span>前往平台首页搜索</span>
