@@ -1,5 +1,6 @@
 'use client';
 
+import { trackEvent } from '@/lib/analytics';
 import React, { useState, useRef, useEffect } from 'react';
 import { Layout } from './components/Layout';
 import { UserProfile, JobMatch, AnalysisResult, User, HistoryItem } from '../types';
@@ -112,6 +113,7 @@ export default function Home() {
 
     setProfile(prev => ({ ...prev, resumeText: text }));
     setFileName(file.name);
+    trackEvent('resume_upload_success');
 
     if (!text || text.length < 10) {
       setError("PDF 内容提取失败，请确认文件包含文字而非图片扫描件。");
@@ -171,6 +173,7 @@ export default function Home() {
       setJobs(matchedJobs);
       setSeenJobKeys(matchedJobs.map(j => `${j.company}-${j.title}`));
       setStep('results');
+      trackEvent('match_result_view');
     } catch (err: any) {
       setError(getFriendlyErrorMessage(err));
     } finally {
@@ -330,7 +333,17 @@ export default function Home() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
               {jobs.map((job, idx) => (
                 <div key={idx} className="glass-panel rounded-[2rem] hover:shadow-2xl hover:-translate-y-2 transition-all flex flex-col h-full overflow-hidden border-0">
-                  <JobCard job={job} onOptimize={() => setSelectedJobForOptimize(job)} onViewDetails={() => setSelectedJobForDetails(job)} />
+                  <JobCard 
+                    job={job} 
+                    onOptimize={() => {
+                      trackEvent('resume_optimize_click', { job_title: job.title });
+                      setSelectedJobForOptimize(job);
+                    }} 
+                    onViewDetails={() => {
+                      trackEvent('job_detail_open', { job_title: job.title, company: job.company });
+                      setSelectedJobForDetails(job);
+                    }} 
+                  />
                 </div>
               ))}
             </div>
