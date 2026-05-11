@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { GoogleAnalytics } from '@next/third-parties/google';  // ← 新增这行
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,6 +31,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <div className="bg-flowing"></div>
         {children}
+        <GoogleAnalytics gaId="G-L8QZLC892D" />  // ← 新增这行
       </body>
     </html>
   );
