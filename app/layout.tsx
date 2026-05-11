@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { GoogleAnalytics } from '@next/third-parties/google';  // ← 新增这行
+import Script from "next/script";  // Next.js 内置，不需要安装
 import "./globals.css";
 
 const geistSans = Geist({
@@ -28,10 +28,23 @@ export default function RootLayout({
       lang="zh-CN"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <Script
+          src="https://www.googletagmanager.com/gtag/js?id=G-L8QZLC892D"
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', 'G-L8QZLC892D');
+          `}
+        </Script>
+      </head>
       <body className="min-h-full flex flex-col">
         <div className="bg-flowing"></div>
         {children}
-        <GoogleAnalytics gaId="G-L8QZLC892D" />  // ← 新增这行
       </body>
     </html>
   );
