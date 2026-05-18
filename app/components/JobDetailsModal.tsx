@@ -29,7 +29,7 @@ export const JobDetailsModal: React.FC<JobDetailsModalProps> = ({ job, onClose, 
   };
 
   const handleExternalLink = () => {
-    trackEvent('external_link_click', { target: job.source || '招聘平台', url: job.url });
+    trackEvent('external_link_click', { target: job.company || '招聘平台', url: job.url });
   };
 
   return (
